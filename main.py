@@ -1,102 +1,93 @@
+# main.py
+import os
 import cv2
 import numpy as np
 import torch
-import pyttsx3
-import time
-from depth_anything_v2.dpt import DepthAnythingV2
+import requests
+from flask import Flask, request, jsonify
 from ultralytics import YOLO
+from depth_anything_v2.dpt import DepthAnythingV2
+from depth_anything_v2.configs import model_configs
+from PIL import Image
+from io import BytesIO
+import base64
 
-# Device configuration
-DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+# === Setup ===
+app = Flask(__name__)
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+CHECKPOINT_PATH = "checkpoints/depth_anything_v2_metric_hypersim_vits.pth"
+DRIVE_FILE_ID = "1wcL4ynZ4-2MYe-udV2VolKKAtZVmSh0L"  # Google Drive ID
 
-# Initialize Depth Anything V2
-model_configs = {
-    'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-}
-encoder = 'vits'
-depth_anything = DepthAnythingV2(**model_configs[encoder])
-depth_anything.load_state_dict(torch.load('checkpoints/depth_anything_v2_metric_hypersim_vits.pth', map_location='cpu'))
-depth_anything = depth_anything.to(DEVICE).eval()
+# === Ensure checkpoint exists ===
+os.makedirs("checkpoints", exist_ok=True)
+if not os.path.exists(CHECKPOINT_PATH):
+    print("Downloading DepthAnything checkpoint...")
+    URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
+    r = requests.get(URL)
+    with open(CHECKPOINT_PATH, 'wb') as f:
+        f.write(r.content)
+    print("Checkpoint downloaded.")
 
-# Load YOLOv8 model
-yolo_model = YOLO("yolov8s.pt")
+# === Load DepthAnythingV2 ===
+depth_model = DepthAnythingV2(model_configs["vits"])
+depth_model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+depth_model.to(DEVICE).eval()
 
-# Text-to-speech setup
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)
-last_spoken = {}
-cooldown_sec = 3  # seconds between alerts for same object class
+# === Ensure YOLO model exists ===
+YOLO_MODEL_PATH = "yolov8s.pt"
+if not os.path.exists(YOLO_MODEL_PATH):
+    print("Downloading YOLOv8s model...")
+    yolo_url = "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt"
+    r = requests.get(yolo_url)
+    with open(YOLO_MODEL_PATH, 'wb') as f:
+        f.write(r.content)
+    print("YOLOv8s model downloaded.")
 
-# Open webcam
-cap = cv2.VideoCapture(3)
-if not cap.isOpened():
-    print("Error: Could not open webcam.")
-    exit()
+# === Load YOLOv8 ===
+yolo_model = YOLO(YOLO_MODEL_PATH)
 
-# Function to calculate object distances
-def get_object_distance(detections, depth_map):
-    results = []
-    for detection in detections:
-        class_name, conf, x1, y1, x2, y2 = detection
-        x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-        object_depth = depth_map[y1:y2, x1:x2]
-        if object_depth.size == 0:
+# === Inference Route ===
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    if "image" not in request.files:
+        return jsonify({"error": "Image file not found"}), 400
+
+    file = request.files["image"]
+    image = Image.open(file.stream).convert("RGB")
+    frame = np.array(image)
+
+    # Depth estimation preprocessing
+    resized = cv2.resize(frame, (518, 518))
+    rgb_tensor = torch.from_numpy(resized).permute(2, 0, 1).unsqueeze(0).float().to(DEVICE) / 255.0
+    with torch.no_grad():
+        depth_map = depth_model(rgb_tensor)[0][0].cpu().numpy()
+    depth_map = cv2.resize(depth_map, (frame.shape[1], frame.shape[0]))
+
+    # YOLOv8 object detection
+    results = yolo_model(frame)[0]
+    boxes = results.boxes.data.cpu().numpy()
+    class_ids = results.boxes.cls.cpu().numpy()
+    names = results.names
+
+    detections = []
+    for i, box in enumerate(boxes):
+        x1, y1, x2, y2, conf, cls_id = map(int, box[:4]) + [box[4], int(class_ids[i])]
+        label = names[cls_id]
+        depth_crop = depth_map[y1:y2, x1:x2]
+        if depth_crop.size == 0:
             continue
-        avg_depth = np.mean(object_depth)
-        results.append((class_name, conf, avg_depth, (x1, y1, x2, y2)))
-    return results
+        avg_depth = float(np.mean(depth_crop))
+        detections.append({
+            "label": label,
+            "confidence": round(float(conf), 2),
+            "distance": round(avg_depth, 2)
+        })
 
-# Main loop
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Error: Failed to capture image.")
-        break
+    return jsonify({"detections": detections})
 
-    # Resize frame for depth model
-    input_size = 518
-    resized_frame = cv2.resize(frame, (input_size, input_size))
+# === Start Flask app ===
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
-    # Get depth map
-    depth = depth_anything.infer_image(resized_frame, input_size)
-    depth_resized = cv2.resize(depth, (frame.shape[1], frame.shape[0]))
-
-    # Object detection
-    yolo_results = yolo_model(frame)
-    detections = yolo_results[0].boxes.data.cpu().numpy()
-
-    formatted_detections = [
-        (yolo_model.names[int(d[5])], d[4], d[0], d[1], d[2], d[3])
-        for d in detections
-    ]
-
-    object_distances = get_object_distance(formatted_detections, depth_resized)
-
-    # Annotate and speak alerts
-    for obj in object_distances:
-        class_name, conf, distance, (x1, y1, x2, y2) = obj
-
-        # Draw bounding box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{class_name}: {distance:.2f} m"
-        cv2.putText(frame, label, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        # Speak if object is close
-        if distance < 1.5:
-            now = time.time()
-            if class_name not in last_spoken or now - last_spoken[class_name] > cooldown_sec:
-                speak = f"{class_name} ahead at {distance:.1f} meters"
-                print("SPEAK:", speak)
-                engine.say(speak)
-                engine.runAndWait()
-                last_spoken[class_name] = now
-
-    # Show only annotated camera frame
-    cv2.imshow("Walk Along Mode", frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
