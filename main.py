@@ -39,7 +39,7 @@ if not os.path.exists(YOLO_MODEL_PATH):
     print("YOLOv8 model downloaded.")
 
 # === Load models ===
-depth_model = DepthAnythingV2(model_configs["vits"])
+depth_model = DepthAnythingV2(**model_configs["vits"])
 depth_model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
 depth_model.to(DEVICE).eval()
 
