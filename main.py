@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import torch
 import gdown
+import requests
 from flask import Flask, request, jsonify
 from ultralytics import YOLO
 from depth_anything_v2.dpt import DepthAnythingV2
