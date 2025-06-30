@@ -1,0 +1,52 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+ENV/
+env/
+*.env
+
+# Checkpoints and large model files
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# Logs and debug
+*.log
+*.tmp
+*.bak
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# System-specific
+.DS_Store
+Thumbs.db
+
+# VSCode settings (optional)
+.vscode/
+
+# Render logs (if created)
+render-build.log
+
+# Gradio temp files (if used before)
+gradio_cached_examples/
+
+# Ignore compiled object files
+*.o
+*.dll
+*.lib
+*.exe
+
+# Output files from testing or temporary use
+output/
+runs/
+test_results/
+
+# Flask-related
+instance/
+.webassets-cache/
