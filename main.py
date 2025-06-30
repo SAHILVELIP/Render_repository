@@ -3,7 +3,7 @@ import os
 import cv2
 import numpy as np
 import torch
-import requests
+import gdown
 from flask import Flask, request, jsonify
 from ultralytics import YOLO
 from depth_anything_v2.dpt import DepthAnythingV2
@@ -23,11 +23,9 @@ DRIVE_FILE_ID = "1wcL4ynZ4-2MYe-udV2VolKKAtZVmSh0L"  # Replace if needed
 os.makedirs("checkpoints", exist_ok=True)
 if not os.path.exists(CHECKPOINT_PATH):
     print("Downloading DepthAnything checkpoint...")
-    url = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
-    r = requests.get(url)
-    with open(CHECKPOINT_PATH, 'wb') as f:
-        f.write(r.content)
-    print("Checkpoint downloaded.")
+    file_id = "1wcL4ynZ4-2MYe-udV2VolKKAtZVmSh0L"
+    url = f"https://drive.google.com/uc?id={file_id}"
+    gdown.download(url, CHECKPOINT_PATH, quiet=False)
 
 # === Download YOLOv8 model if missing ===
 if not os.path.exists(YOLO_MODEL_PATH):
