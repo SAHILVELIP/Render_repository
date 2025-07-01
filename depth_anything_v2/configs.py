@@ -1,5 +1,3 @@
-# depth_anything_v2/configs.py
-
 model_configs = {
     'vits': {
         'encoder': 'vits',
